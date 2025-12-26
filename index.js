@@ -64,14 +64,15 @@ function decryptMessage(encrypt) {
 
 // Webhook Lark Bot
 app.post('/lark-webhook', async (req, res) => {
-  const timestamp = req.headers['x-lark-request-timestamp'];
-  const nonce = req.headers['x-lark-request-nonce'];
-  const signature = req.headers['x-lark-signature'];
+  const timestamp = req.get('x-lark-request-timestamp');
+  const nonce = req.get('x-lark-request-nonce');
+  const signature = req.get('x-lark-signature');
 
-  console.log("=== Incoming raw body ===");
-  console.log(req.rawBody);
+  console.log("Headers received:");
+  console.log("timestamp:", timestamp);
+  console.log("nonce:", nonce);
+  console.log("signature:", signature);
 
-  // Kiểm tra đủ header
   if (!timestamp || !nonce || !signature) {
     console.log("Missing required headers for signature verification");
     return res.status(400).send('Missing headers');
