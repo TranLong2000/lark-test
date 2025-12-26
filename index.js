@@ -9,7 +9,7 @@ const app = express();
 // Giữ raw body để debug
 app.use(bodyParser.json({
   verify: (req, res, buf) => {
-    req.rawBody = buf.toString('utf8'); // Chỉ rõ encoding utf8
+    req.rawBody = buf.toString('utf8'); // đảm bảo utf8
   }
 }));
 
@@ -17,26 +17,18 @@ app.use(bodyParser.json({
 const APP_ID = process.env.App_ID;
 const APP_SECRET = process.env.App_Secret;
 const VERIFICATION_TOKEN = process.env.Verification_Token;
-const ENCRYPT_KEY = process.env.Encrypt_Key.trim(); // loại bỏ khoảng trắng thừa
+const ENCRYPT_KEY = process.env.Encrypt_Key.trim();
 const AI_KEY = process.env.AI_Key.trim();
+const LARK_DOMAIN = process.env.Lark_Domain?.trim() || 'https://open.larksuite.com/';
 
-// Hàm xác thực signature Lark bằng HMAC-SHA256 (chuẩn Lark)
+// Hàm xác thực signature Lark bằng HMAC SHA256
 function verifySignature(timestamp, nonce, body, signature) {
   try {
-    // Chuyển Encrypt_Key từ base64 sang buffer (32 bytes)
     const key = Buffer.from(ENCRYPT_KEY, 'base64');
-
-    // Dữ liệu HMAC: timestamp + '\n' + nonce + '\n' + body + '\n'
     const text = `${timestamp}\n${nonce}\n${body}\n`;
-
-    // HMAC-SHA256 với key là EncodingAESKey (buffer)
     const hmac = crypto.createHmac('sha256', key);
     hmac.update(text);
-
-    // Kết quả base64
     const hash = hmac.digest('base64');
-
-    // So sánh signature từ header với kết quả HMAC
     return hash === signature;
   } catch (err) {
     console.error("Signature verify error:", err);
@@ -44,17 +36,14 @@ function verifySignature(timestamp, nonce, body, signature) {
   }
 }
 
-// Hàm giải mã message (AES-128-ECB, Base64)
+// Hàm giải mã message (AES-128-ECB)
 function decryptMessage(encrypt) {
   try {
-    // Mã hóa Lark dùng AES-128-ECB với key 16 bytes đầu của EncodingAESKey
     const key = Buffer.from(ENCRYPT_KEY, 'base64').slice(0, 16);
     const decipher = crypto.createDecipheriv('aes-128-ecb', key, null);
     decipher.setAutoPadding(true);
-
     let decrypted = decipher.update(encrypt, 'base64', 'utf8');
     decrypted += decipher.final('utf8');
-
     return JSON.parse(decrypted);
   } catch (err) {
     console.error("Decrypt error:", err.message);
@@ -62,23 +51,23 @@ function decryptMessage(encrypt) {
   }
 }
 
-// Webhook Lark Bot
+// Webhook xử lý sự kiện Lark
 app.post('/lark-webhook', async (req, res) => {
   const timestamp = req.get('x-lark-request-timestamp');
   const nonce = req.get('x-lark-request-nonce');
   const signature = req.get('x-lark-signature');
 
   console.log("Headers received:");
-  console.log("timestamp:", timestamp);
-  console.log("nonce:", nonce);
-  console.log("signature:", signature);
+  console.log({ timestamp, nonce, signature });
+  console.log("=== Incoming raw body ===");
+  console.log(req.rawBody);
 
   if (!timestamp || !nonce || !signature) {
     console.log("Missing required headers for signature verification");
     return res.status(400).send('Missing headers');
   }
 
-  // Xác thực signature
+  // Xác thực chữ ký
   if (!verifySignature(timestamp, nonce, req.rawBody, signature)) {
     console.log("Invalid signature!");
     return res.status(401).send('Invalid signature');
@@ -98,12 +87,11 @@ app.post('/lark-webhook', async (req, res) => {
   console.log("=== Decrypted payload ===");
   console.log(decrypted);
 
-  // Xử lý URL verification
   if (decrypted.type === 'url_verification') {
+    // Trả về challenge khi verify url
     return res.json({ challenge: decrypted.challenge });
   }
 
-  // Xác thực token
   if (decrypted.token !== VERIFICATION_TOKEN) {
     console.log("Invalid token:", decrypted.token);
     return res.status(401).send('Invalid token');
@@ -113,7 +101,6 @@ app.post('/lark-webhook', async (req, res) => {
   console.log("User message:", userMessage);
 
   try {
-    // Gửi request tới OpenRouter
     const response = await axios.post(
       'https://openrouter.ai/api/v1/chat/completions',
       {
@@ -128,7 +115,6 @@ app.post('/lark-webhook', async (req, res) => {
     const aiReply = response.data.choices[0].message.content;
     console.log("AI reply:", aiReply);
 
-    // Trả về Lark
     res.json({
       status: "success",
       msg_type: "text",
