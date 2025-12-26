@@ -2,13 +2,13 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const { Lark } = require('@larksuiteoapi/node-sdk');
+const { Webhook } = require('@larksuiteoapi/node-sdk');
 
 const app = express();
 app.use(bodyParser.json());
 
 // Khởi tạo SDK Lark
-const lark = new Lark({
+const webhook = new Webhook({
   appId: process.env.App_ID,
   appSecret: process.env.App_Secret,
   encryptKey: process.env.Encrypt_Key,
@@ -19,7 +19,7 @@ const lark = new Lark({
 app.post('/lark-webhook', async (req, res) => {
   try {
     // SDK tự giải mã payload
-    const event = lark.parseEvent(req.body);
+    const event = webhook.parseEvent(req.body);
     console.log("Decrypted event:", event);
 
     // Xử lý URL verification
@@ -27,6 +27,7 @@ app.post('/lark-webhook', async (req, res) => {
       return res.json({ challenge: event.challenge });
     }
 
+    // Lấy message từ user
     const userMessage = event.event?.text?.content || '';
     console.log("User message:", userMessage);
 
