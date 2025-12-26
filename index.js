@@ -74,13 +74,15 @@ async function replyToLark(messageId, text) {
 // ===================== WEBHOOK =====================
 app.post('/lark-webhook', express.raw({ type: '*/*' }), async (req, res) => {
   try {
+    console.log('🔥 WEBHOOK HIT');
+
     const rawBody = req.body.toString('utf8');
 
     const signature = req.headers['x-lark-signature'];
     const timestamp = req.headers['x-lark-request-timestamp'];
     const nonce = req.headers['x-lark-request-nonce'];
 
-    // ---------- VERIFY SIGNATURE ----------
+    // ---------- VERIFY ----------
     if (
       rawBody.includes('"encrypt"') &&
       signature &&
@@ -88,7 +90,7 @@ app.post('/lark-webhook', express.raw({ type: '*/*' }), async (req, res) => {
       nonce &&
       !verifySignature(timestamp, nonce, rawBody, signature)
     ) {
-      console.warn('[Webhook] ⚠️ Signature mismatch – fallback allowed');
+      console.warn('[Webhook] ⚠️ Signature mismatch (ignored)');
     }
 
     // ---------- PARSE ----------
@@ -129,41 +131,39 @@ app.post('/lark-webhook', express.raw({ type: '*/*' }), async (req, res) => {
         text = JSON.parse(message.content || '{}')?.text || '';
       } catch {}
 
-      // ===== CHECK BOT MENTION (DÙNG APP_ID) =====
-let botMentioned = false;
+      console.log('🧩 chatType:', chatType);
+      console.log('🧩 raw text:', text);
+      console.log('🧩 mentions:', JSON.stringify(mentions, null, 2));
 
-// case 1: mentions array
-for (const m of mentions) {
-  if (m.id?.app_id === APP_ID) {
-    botMentioned = true;
-    if (m.key) {
-      text = text.replace(new RegExp(m.key, 'gi'), '');
-    }
-  }
-}
+      // ===== DETECT BOT MENTION (SAFE MODE) =====
+      let botMentioned = false;
 
-// case 2: <at user_id="cli_xxx">
-if (!botMentioned && text.includes(`<at user_id="${APP_ID}">`)) {
-  botMentioned = true;
-  text = text.replace(
-    new RegExp(`<at user_id="${APP_ID}">.*?<\\/at>`, 'gi'),
-    ''
-  );
-}
-
-// cleanup
-text = text.replace(/<at.*?<\/at>/g, '').trim();
-
-
-      // ❌ group mà không mention bot → ignore
-      if (chatType === 'group' && !botMentioned) {
-        return res.json({ code: 0 });
+      // case 1: mentions array
+      for (const m of mentions) {
+        if (m.id?.app_id === APP_ID || m.id?.open_id) {
+          botMentioned = true;
+          if (m.key) {
+            text = text.replace(new RegExp(m.key, 'gi'), '');
+          }
+        }
       }
 
+      // case 2: any <at> tag
+      if (!botMentioned && /<at .*?>/i.test(text)) {
+        botMentioned = true;
+      }
+
+      // cleanup
+      text = text.replace(/<at.*?<\/at>/g, '').trim();
+
+      console.log('🤖 botMentioned:', botMentioned);
       console.log('[User]', text);
 
       // ✅ ACK NGAY
       res.json({ code: 0 });
+
+      // ❌ group mà KHÔNG detect mention → vẫn cho trả lời (fallback)
+      // 👉 tránh mất tín hiệu tag do Lark bug
 
       // ---------- CALL OPENROUTER ----------
       try {
@@ -176,9 +176,7 @@ text = text.replace(/<at.*?<\/at>/g, '').trim();
           {
             headers: {
               Authorization: `Bearer ${AI_KEY}`,
-              'Content-Type': 'application/json',
-              'HTTP-Referer': 'https://yourdomain.com',
-              'X-Title': 'Lark Bot'
+              'Content-Type': 'application/json'
             }
           }
         );
