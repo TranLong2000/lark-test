@@ -22,10 +22,13 @@ const AI_KEY = process.env.AI_Key;
 
 // Hàm xác thực signature Lark bằng SHA256
 function verifySignature(timestamp, nonce, body, signature) {
-  const str = `${timestamp}${nonce}${ENCRYPT_KEY}${body}`;
-  const hash = crypto.createHash('sha256').update(str).digest('hex');
+  const text = `${timestamp}\n${nonce}\n${body}\n`; // chú ý \n cuối
+  const hmac = crypto.createHmac('sha256', ENCRYPT_KEY);
+  hmac.update(text);
+  const hash = hmac.digest('base64');
   return hash === signature;
 }
+
 
 // Hàm giải mã message (AES-ECB, Base64)
 function decryptMessage(encrypt) {
