@@ -130,19 +130,30 @@ app.post('/lark-webhook', express.raw({ type: '*/*' }), async (req, res) => {
       } catch {}
 
       // ===== CHECK BOT MENTION (DÙNG APP_ID) =====
-      let botMentioned = false;
+let botMentioned = false;
 
-      for (const m of mentions) {
-        if (m.id?.app_id === APP_ID) {
-          botMentioned = true;
-          if (m.key) {
-            text = text.replace(new RegExp(m.key, 'gi'), '');
-          }
-        }
-      }
+// case 1: mentions array
+for (const m of mentions) {
+  if (m.id?.app_id === APP_ID) {
+    botMentioned = true;
+    if (m.key) {
+      text = text.replace(new RegExp(m.key, 'gi'), '');
+    }
+  }
+}
 
-      // clean leftover <at></at>
-      text = text.replace(/<at.*?<\/at>/g, '').trim();
+// case 2: <at user_id="cli_xxx">
+if (!botMentioned && text.includes(`<at user_id="${APP_ID}">`)) {
+  botMentioned = true;
+  text = text.replace(
+    new RegExp(`<at user_id="${APP_ID}">.*?<\\/at>`, 'gi'),
+    ''
+  );
+}
+
+// cleanup
+text = text.replace(/<at.*?<\/at>/g, '').trim();
+
 
       // ❌ group mà không mention bot → ignore
       if (chatType === 'group' && !botMentioned) {
