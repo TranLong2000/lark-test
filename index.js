@@ -5,145 +5,176 @@ const axios = require('axios');
 
 const app = express();
 
-// Lấy các giá trị từ .env
-const LARK_DOMAIN = process.env.Lark_Domain || 'https://open.larksuite.com/';
+// ===================== ENV =====================
+const LARK_DOMAIN = process.env.Lark_Domain || 'https://open.larksuite.com';
 const APP_ID = process.env.App_ID;
 const APP_SECRET = process.env.App_Secret;
 const VERIFICATION_TOKEN = process.env.Verification_Token;
-const ENCRYPT_KEY = process.env.Encrypt_Key.trim();
-const AI_KEY = process.env.AI_Key.trim();
+const ENCRYPT_KEY = process.env.Encrypt_Key?.trim();
+const AI_KEY = process.env.AI_Key?.trim();
 
-// Hàm xác thực chữ ký Lark bằng SHA256
+// ===================== VERIFY SIGNATURE =====================
 function verifySignature(timestamp, nonce, body, signature) {
   try {
     const raw = `${timestamp}${nonce}${ENCRYPT_KEY}${body}`;
     const hash = crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
-    const isValid = hash === signature;
 
-    if (!isValid) {
-      console.warn("[verifySignature] ❌ Signature mismatch");
-      console.warn("  ↳ Calculated:", hash);
-      console.warn("  ↳ Received:  ", signature);
+    if (hash !== signature) {
+      console.warn('[verifySignature] ❌ Signature mismatch');
+      console.warn('Calculated:', hash);
+      console.warn('Received:  ', signature);
+      return false;
     }
-
-    return isValid;
+    return true;
   } catch (err) {
-    console.error("Signature verify error:", err);
+    console.error('Signature verify error:', err.message);
     return false;
   }
 }
 
-// Hàm giải mã message (AES-256-CBC)
+// ===================== DECRYPT =====================
 function decryptMessage(encrypt) {
-  try {
-    const key = Buffer.from(ENCRYPT_KEY, 'utf-8');
-    const aesKey = crypto.createHash('sha256').update(key).digest();
-    const data = Buffer.from(encrypt, 'base64');
-    const iv = data.slice(0, 16);
-    const encryptedText = data.slice(16);
+  const key = Buffer.from(ENCRYPT_KEY, 'utf8');
+  const aesKey = crypto.createHash('sha256').update(key).digest();
+  const data = Buffer.from(encrypt, 'base64');
 
-    const decipher = crypto.createDecipheriv('aes-256-cbc', aesKey, iv);
-    let decrypted = decipher.update(encryptedText);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
+  const iv = data.slice(0, 16);
+  const encryptedText = data.slice(16);
 
-    return JSON.parse(decrypted.toString());
-  } catch (err) {
-    console.error("Decrypt error:", err.message);
-    return null;
-  }
+  const decipher = crypto.createDecipheriv('aes-256-cbc', aesKey, iv);
+  let decrypted = decipher.update(encryptedText);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+  return JSON.parse(decrypted.toString());
 }
 
-// -------------------- WEBHOOK --------------------
-app.post('/lark-webhook', express.raw({ type: '*/*' }), async (req, res) => {
-  const rawBody = req.body.toString('utf8');
-  const signature = req.headers['x-lark-signature'];
-  const timestamp = req.headers['x-lark-request-timestamp'];
-  const nonce = req.headers['x-lark-request-nonce'];
-
-  console.log("All headers:", req.headers);
-  console.log("Raw body:", rawBody);
-
-  if (!timestamp || !nonce || !signature) {
-    console.log("Missing required headers for signature verification");
-    return res.status(400).send('Missing headers');
-  }
-
-  // Kiểm tra chữ ký
-  let isVerified = true;
-  if (rawBody.includes('"encrypt"')) {
-    isVerified = verifySignature(timestamp, nonce, rawBody, signature);
-  }
-
-  if (!isVerified) {
-    console.error("[Webhook] ❌ Signature verification failed.");
-    return res.status(401).send('Invalid signature');
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(rawBody);
-  } catch (err) {
-    console.warn("[Webhook] ❌ Cannot parse JSON payload:", err.message);
-    return res.sendStatus(400);
-  }
-
-  // Giải mã nếu cần
-  let decrypted = payload;
-  if (payload?.encrypt) {
-    try {
-      decrypted = decryptMessage(payload.encrypt);
-    } catch (err) {
-      console.error("[Webhook] ❌ decryptMessage error:", err.message);
-      return res.json({ code: 0 });
+// ===================== GET APP TOKEN =====================
+async function getAppAccessToken() {
+  const res = await axios.post(
+    `${LARK_DOMAIN}/open-apis/auth/v3/app_access_token/internal`,
+    {
+      app_id: APP_ID,
+      app_secret: APP_SECRET
     }
-  }
+  );
+  return res.data.app_access_token;
+}
 
-  console.log("Decrypted payload:", decrypted);
+// ===================== REPLY TO LARK =====================
+async function replyToLark(messageId, text) {
+  const token = await getAppAccessToken();
 
-  // Kiểm tra thử thách
-  if (decrypted?.challenge) {
-    console.log("[Webhook] 🔑 Verification challenge received");
-    return res.json({ challenge: decrypted.challenge });
-  }
+  await axios.post(
+    `${LARK_DOMAIN}/open-apis/im/v1/messages/${messageId}/reply`,
+    {
+      msg_type: 'text',
+      content: JSON.stringify({ text })
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+}
 
-  // Kiểm tra token xác thực
-  if (decrypted.token && decrypted.token !== VERIFICATION_TOKEN) {
-    console.log("Invalid token:", decrypted.token);
-    return res.status(401).send('Invalid token');
-  }
+// ===================== WEBHOOK =====================
+app.post('/lark-webhook', express.raw({ type: '*/*' }), async (req, res) => {
+  let payload;
 
-  const userMessage = decrypted.event?.text?.content || '';
-  console.log('User message:', userMessage);
-
-  // Gửi yêu cầu đến OpenRouter API
   try {
-    const response = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: userMessage }],
-      },
-      { headers: { 'Authorization': `Bearer ${AI_KEY}` } }
-    );
+    const rawBody = req.body.toString('utf8');
+    const signature = req.headers['x-lark-signature'];
+    const timestamp = req.headers['x-lark-request-timestamp'];
+    const nonce = req.headers['x-lark-request-nonce'];
 
-    const aiReply = response.data.choices[0].message.content;
-    console.log('AI reply:', aiReply);
+    // ---------- Verify signature ----------
+    let isVerified = true;
+    if (rawBody.includes('"encrypt"')) {
+      isVerified = verifySignature(timestamp, nonce, rawBody, signature);
+    }
 
-    // Trả về phản hồi hợp lệ
-    res.json({
-      status: "success",
-      msg_type: "text",
-      content: { text: aiReply }
-    });
+    if (!isVerified) {
+      console.error('[Webhook] ❌ Invalid signature');
+      return res.sendStatus(401);
+    }
+
+    // ---------- Parse JSON ----------
+    payload = JSON.parse(rawBody);
+
+    // ---------- Decrypt ----------
+    let decrypted = payload;
+    if (payload.encrypt) {
+      decrypted = decryptMessage(payload.encrypt);
+    }
+
+    console.log('[Webhook] Decrypted payload:', decrypted);
+
+    // ---------- Challenge ----------
+    if (decrypted.challenge) {
+      return res.json({ challenge: decrypted.challenge });
+    }
+
+    // ---------- Token verify ----------
+    if (decrypted.token && decrypted.token !== VERIFICATION_TOKEN) {
+      console.warn('[Webhook] ❌ Invalid verification token');
+      return res.sendStatus(401);
+    }
+
+    // ---------- Chat message ----------
+    if (decrypted.header?.event_type === 'im.message.receive_v1') {
+      const messageId = decrypted.event?.message?.message_id;
+      const userMessage =
+        JSON.parse(decrypted.event?.message?.content || '{}')?.text || '';
+
+      console.log('[User]', userMessage);
+
+      // 🔥 ACK cho Lark NGAY
+      res.json({ code: 0 });
+
+      // ---------- Call AI ----------
+      try {
+        const aiResp = await axios.post(
+          'https://openrouter.ai/api/v1/chat/completions',
+          {
+            model: 'gpt-4o-mini',
+            messages: [{ role: 'user', content: userMessage }]
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${AI_KEY}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        const aiReply =
+          aiResp.data?.choices?.[0]?.message?.content ||
+          '⚠️ AI không phản hồi';
+
+        console.log('[AI]', aiReply);
+
+        // ---------- Reply to Lark ----------
+        await replyToLark(messageId, aiReply);
+      } catch (err) {
+        console.error('[AI Error]', err.response?.data || err.message);
+      }
+
+      return;
+    }
+
+    // ---------- Default ACK ----------
+    return res.json({ code: 0 });
 
   } catch (err) {
-    console.error('OpenRouter API error:', err.message);
-    return res.status(500).json({ status: "error", message: "Invalid response from OpenRouter API" });
+    console.error('[Webhook] ❌ Error:', err.message);
+    return res.json({ code: 0 });
   }
 });
 
-// Start server
+// ===================== START SERVER =====================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
