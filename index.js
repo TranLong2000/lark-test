@@ -45,7 +45,8 @@ function decryptMessage(encrypt) {
 
 // -------------------- WEBHOOK --------------------
 app.post('/lark-webhook', express.raw({ type: '*/*' }), async (req, res) => {
-  console.log('All headers:', req.headers);  // In tất cả headers
+  console.log('All headers:', req.headers);  // In tất cả các headers để kiểm tra
+
   const rawBody = req.body.toString('utf8');
   const signature = req.headers['x-lark-signature'];
   const timestamp = req.headers['x-lark-request-timestamp'];
@@ -110,6 +111,7 @@ app.post('/lark-webhook', express.raw({ type: '*/*' }), async (req, res) => {
     return res.status(500).json({ status: 'error', message: 'OpenRouter API error' });
   }
 });
+
 
 // Start server
 const PORT = process.env.PORT || 3000;
